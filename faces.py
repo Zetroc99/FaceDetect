@@ -43,13 +43,25 @@ class FacesConfig(config.Config):
     STEPS_PER_EPOCH = 500
 
 
-class FacesInferConfig(FacesConfig):
+class FacesInferConfig(config.Config):
     """
     Configurations for inferring after training has been complete.
     Inherits from FacesConfig and overrides some values
     """
-    NAME = "InferFaces"
+    NAME = "Faces"
+
+    GPU_COUNT = 1
     IMAGES_PER_GPU = 1
+
+    BACKBONE = 'resnet50'
+
+    IMAGE_MIN_DIM = 256
+    IMAGE_MAX_DIM = 256
+
+    NUM_CLASSES = 4
+
+    LEARNING_RATE = 0.001
+    STEPS_PER_EPOCH = 500
 
 
 ############################################################
@@ -57,12 +69,7 @@ class FacesInferConfig(FacesConfig):
 ############################################################
 
 
-def load_images_data(filepath):
-    """Load JSON COCO format annotations"""
-    with open(filepath) as file:
-        info = json.load(file)
 
-    return info
 
 
 class FacesDataset(utils.Dataset):
@@ -83,7 +90,7 @@ class FacesDataset(utils.Dataset):
         self.add_class('Faces', 2, 'nose')
         self.add_class('Faces', 3, 'mouth')
         # load and save JSON file with annotations
-        self.images_data = load_images_data(annotations_path)
+        self.images_data = self.load_images_data(annotations_path)
 
         # Add images
         for i, filename in enumerate(images_list):
@@ -103,6 +110,13 @@ class FacesDataset(utils.Dataset):
                                    width=img_w)
         # Add annotations to images after all images have been loaded
         self.add_annotations()
+
+    def load_images_data(self, filepath):
+        """Load JSON COCO format annotations"""
+        with open(filepath) as file:
+            info = json.load(file)
+
+        return info
 
     def image_reference(self, image_id: int) -> str or None:
         """Return the path of the image"""
@@ -162,15 +176,38 @@ class FacesDataset(utils.Dataset):
         return mask, class_ids
 
 
-def load_model(configs, weights_fp=None, exclude=None, mode='training'):
+def load_train(configs, weights=None):
     # generate model
-    model = modellib.MaskRCNN(mode=mode,
+    model = modellib.MaskRCNN(mode='training',
                               config=configs,
                               model_dir=MODEL_PATH)
-
     # load weights
-    model.load_weights(filepath=weights_fp, by_name=True,
-                       exclude=exclude)
+    if weights is None:
+        find_weights = model.find_last()
+        model.load_weights(filepath=find_weights, by_name=True,
+                           exclude=["mrcnn_class_logits",
+                                    "mrcnn_bbox_fc", "mrcnn_bbox",
+                                    "mrcnn_mask"])
+    else:
+        model.load_weights(filepath=weights, by_name=True,
+                           exclude=["mrcnn_class_logits",
+                                    "mrcnn_bbox_fc", "mrcnn_bbox",
+                                    "mrcnn_mask"])
+
+    return model
+
+
+def load_inference(configs, weights=None):
+    # generate model
+    model = modellib.MaskRCNN(mode='inference',
+                              config=configs,
+                              model_dir=MODEL_PATH)
+    # load weights
+    if weights is None:
+        find_weights = model.find_last()
+        model.load_weights(filepath=find_weights, by_name=True)
+    else:
+        model.load_weights(filepath=weights, by_name=True)
 
     return model
 
@@ -178,8 +215,9 @@ def load_model(configs, weights_fp=None, exclude=None, mode='training'):
 def train(model, configs, annot_fn, train_imgs, val_imgs,
           epochs, LR_multiplier=1, layers='heads'):
     """Train model"""
-    # Training set
     Faces_config = configs
+
+    # Training set
     fp = os.path.join(ANNOTS_PATH, annot_fn)
     dataset_train = FacesDataset(train_imgs, fp, DATASET_PATH)
     dataset_train.prepare()
@@ -194,3 +232,4 @@ def train(model, configs, annot_fn, train_imgs, val_imgs,
                 learning_rate=Faces_config.LEARNING_RATE * LR_multiplier,
                 epochs=epochs,
                 layers=layers)
+
